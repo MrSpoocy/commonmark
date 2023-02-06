@@ -119,4 +119,48 @@ HTML;
 
         $this->assertSame($expected, $html);
     }
+
+    public function testHeadlineSingleColspan(): void {
+        $string = <<<TABLE
+| Headline 1 || Headline 2              |
+|------------|-------------|------------|
+| last cell  | last cell   |            |
+TABLE;
+
+        $expected = <<<HTML
+<table>
+<thead>
+<tr>
+<th>Headline 1</th>
+<th colspan="2">Headline 2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>last cell</td>
+<td>last cell</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+
+HTML;
+
+        $environment = new Environment();
+        $environment->addExtension(new CommonMarkCoreExtension());
+        $environment->addExtension(new GithubFlavoredMarkdownExtension());
+
+        $environment->addEventListener(DocumentParsedEvent::class, new ExtendedTableProcessor());
+
+
+        $parser   = new MarkdownParser($environment);
+        $renderer = new HtmlRenderer($environment);
+
+        $document = $parser->parse($string);
+
+        $html = (string) $renderer->renderDocument($document);
+
+        $this->assertSame($expected, $html);
+    }
+
 }

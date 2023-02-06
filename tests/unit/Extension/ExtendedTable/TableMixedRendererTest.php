@@ -66,4 +66,35 @@ HTML;
         $this->assertSame($expected, $html);
     }
 
+    public function testColspanWithRowspan(): void {
+        $string = <<<TABLE
+| Headline 1 | Headline 2  | Headline 3 |
+|------------|-------------|------------|
+| first cell | cell 2      | cell 3     |
+||           |^                         |
+|            | cell 8      | cell 9     |
+TABLE;
+
+        $expected = <<<HTML
+
+HTML;
+
+        $this->markTestSkipped('Noch nicht sicher wie diese Tabelle den überhaupt aussehen sollte');
+
+        $environment = new Environment();
+        $environment->addExtension(new CommonMarkCoreExtension());
+        $environment->addExtension(new GithubFlavoredMarkdownExtension());
+
+        $environment->addEventListener(DocumentParsedEvent::class, new ExtendedTableProcessor());
+
+
+        $parser   = new MarkdownParser($environment);
+        $renderer = new HtmlRenderer($environment);
+
+        $document = $parser->parse($string);
+
+        $html = (string) $renderer->renderDocument($document);
+
+        $this->assertSame($expected, $html);
+    }
 }
