@@ -45,7 +45,6 @@ final class ExtendedTableProcessor
         // Gehe von links nach rechts, die einzelnen Zellen durch und prüfe, ob diese NULL sind (dann wurde die Pipe's direkt aneinander gelegt)
         $colSpan = 1;
         /**
-         * @var int       $i
          * @var TableCell $cell
          */
         foreach ($row->children() as $cell) {
@@ -72,128 +71,87 @@ final class ExtendedTableProcessor
         }
     }
 
+    private function parseRowSpan(TableRow $row, int $cellIndex): int
+    {
+        $rowSpan = 0;
+
+        // Gehe aktuelle und allen nachfolgenden Zeilen durch, um zu prüfen, ob es sich um ein
+        // rowspan handelt und wie groß dieser ist. Gleichzeitig entferne die rowspan Zellen.
+        do {
+            if (!$row->hasChildren()) {
+                break;
+            }
+
+            /** @var TableCell[] $nextChildren */
+            $nextChildren = $row->children();
+            if (
+                // Gib in der nächsten Zeile keine Zelle (z.B. weil das Ende reicht wurde)
+                !isset($nextChildren[$cellIndex])
+                // Es gibt kein Kindelement (und damit kein ^ möglich)
+                || !($child = $nextChildren[$cellIndex]->firstChild())
+                // Kindelement ist nicht vom Typ Text
+                || !($child instanceof Text)
+                // Kein rowspan Zeichen
+                || '^' !== trim($child->getLiteral())
+            ) {
+                break;
+            }
+
+            // Beim ersten durchlauf prüfen wir zusätzlich, ob es eine übergeordnete Zeile gibt
+            if ($rowSpan === 0 && null === $row->previous()) {
+                // Keine übergeordnete Zeile (trifft auch zu, wenn man vom body Teil einer Tabelle
+                // in den header wechseln würde)
+                if ($this->strictMode) {
+                    break;
+                } else {
+                    throw new \RuntimeException('No parent row available to use rowspan');
+                }
+            }
+
+            $nextChildren[$cellIndex]->detach();
+            $rowSpan++;
+        } while ($row = $row->next());
+
+        return $rowSpan;
+    }
     /**
      * Leider müssen es mehrere Schleifen sein, es sind aber alles Objekte, weswegen sie als Referenz übergeben werden.
-     *
-     *
      */
     private function parseTable(Table $table): void
     {
         /** @var TableSection $section */
         foreach ($table->children() as $section) {
 
-            if ($section->isHead()) {
-                $this->parseHeaderSection($section);
-            } else {
+            /** @var TableRow $row */
+            foreach ($section->children() as $row) {
 
+                if ($section->isHead()) {
+                    $this->parseColspan($row);
+                    // Im header darf es kein rowspan geben, wohl gleich es aber colspan geben kann!
+                    continue;
+                }
 
-                /** @var TableRow $row */
-                foreach ($section->children() as $rowIndex => $row) {
+                $cellOffset = 0;
+                /**
+                 * @var int $cellIndex
+                 * @var TableCell $cell
+                 */
+                foreach ($row->children() as $cellIndex => $cell) {
 
-                    if (!$row->hasChildren()) {
-                        continue;
+                    if ($this->isColSpan($cell)) {
+                        $this->parseColspan($row);
                     }
 
-                    $offset = 0;
-
-                    foreach ($row->children() as $cellIndex => $cell) {
-                        if ($this->isColSpan($cell)) {
-                            $this->parseColspan($row);
-                        }
-
-                        // $cell kann bereits ein colspan sein!
-                        if (!$this->isRowSpan($cell)) {
-                            continue;
-                        }
-
-                        /** @var TableRow|null $parent */
-                        $previous = $row->previous();
-                        // Keine übergeordnete Zeile (trifft auch zu, wenn man vom body Teil einer Tabelle in den
-                        // header wechseln würde)
-                        if (null === $previous) {
-                            if ($this->strictMode) {
-                                continue;
-                            } else {
-                                throw new Exception('No parent row available to use rowspan');
-                            }
-                        }
-
-                        // An dieser Stelle ist es bereits eine Zelle über 2 Zeilen.
-                        $rowSpan = 2;
-
-                        // Gehe allen nachfolgenden Zeilen durch, um die größe des rowspan zu ermitteln, und
-                        // entferne die Zelle.
-                        $next = $row;
-                        while ($next = $next->next()) {
-
-                            if (!$next->hasChildren()) {
-                                break;
-                            }
-
-                            $nextChildren = $next->children();
-                            if (!isset($nextChildren[$cellIndex])) {
-                                break;
-                            }
-
-                            // Zum besseren debug, eigene if Bedingung
-                            if (!($child = $nextChildren[$cellIndex]->firstChild()) || !($child instanceof Text) || '^' !== trim($child->getLiteral())) {
-                                break;
-                            }
-
-                            $nextChildren[$cellIndex]->detach();
-                            $rowSpan++;
-                        }
-
-                        // Entferne auch $cell
-                        $cell->detach();
-
+                    $rowSpan = $this->parseRowSpan($row, $cellIndex);
+                    if ($rowSpan) {
                         // An dieser Stelle, kann der $cellIndex falsch sein, wenn es in der Tabelle bereits,
                         // zuvor ein rowspan gab. Deswegen müssen wir einen offset mit einfließen lassen.
-                        $previous->children()[$cellIndex]->data->set('attributes/rowspan', (string) $rowSpan);
-                        ++$offset;
+                        $row->previous()->children()[$cellIndex + $cellOffset]->data->set('attributes/rowspan', (string) ++$rowSpan);
+                        ++$cellOffset;
                     }
                 }
             }
         }
-    }
-
-    /**
-     * Im header darf es kein rowspan geben, wohl gleich es aber colspan geben kann!
-     *
-     * @return void
-     */
-    private function parseHeaderSection(TableSection $section): void {
-
-        // iterator_apply($section->children(), fn($row) =>  $this->parseColspan($row));
-
-         /** @var TableRow $row */
-        foreach ($section->children() as $row) {
-            $this->parseColspan($row);
-        }
-    }
-
-    private function isRowSpan(TableCell $cell): bool
-    {
-        /*
-        return (
-            // Mehr als 1 Kind-element, bedeutet das mehr als "^" im Text stehen würde
-            count($cell->children()) !== 1
-            // Die Zuweisung kann an sich niemals fehlschlagen (aufgrund der Bedingung zuvor)
-            || !($child = $cell->firstChild())
-            // Es muss ein einfaches Text-Element sein
-            || !($child instanceof Text)
-            // trim ist nötig, weil der Benutzer die Tabelle formatiert haben könnte
-            || \trim($child->getLiteral()) != '^'
-        );
-        */
-
-        // Wir müssen noch prüfen, ob ein ^ in der Zelle steht für rowspan
-        if (1 !== count($cell->children()) || !($child = $cell->firstChild()) || !($child instanceof Text)) {
-            return false;
-        }
-
-        // trim ist nötig, weil der Benutzer die Tabelle formatiert haben könnte
-        return '^' === trim($child->getLiteral());
     }
 
     private function isColSpan(TableCell $cell): bool
